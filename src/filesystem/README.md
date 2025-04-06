@@ -9,6 +9,7 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
 - Move files/directories
 - Search files
 - Get file metadata
+- Advanced file editing with multiple matching modes
 
 **Note**: The server will only allow operations within directories specified via `args`.
 
@@ -39,20 +40,29 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
 - **edit_file**
   - Make selective edits using advanced pattern matching and formatting
   - Features:
+    - Multiple matching modes for different use cases:
+      - `exact`: Strict text matching (default)
+      - `structure`: Ignores whitespace & comments for code editing
+      - `semantic`: Intelligent structure-aware code matching
     - Line-based and multi-line content matching
     - Whitespace normalization with indentation preservation
     - Multiple simultaneous edits with correct positioning
     - Indentation style detection and preservation
     - Git-style diff output with context
     - Preview changes with dry run mode
+    - Auto-formatting option for supported languages
   - Inputs:
     - `path` (string): File to edit
     - `edits` (array): List of edit operations
       - `oldText` (string): Text to search for (can be substring)
       - `newText` (string): Text to replace with
+    - `mode` (string): Matching mode - "exact", "structure", or "semantic" (default: "exact")
     - `dryRun` (boolean): Preview changes without applying (default: false)
+    - `formatAfter` (boolean): Auto-format code after edits (default: false)
+    - `includeContext` (boolean): Include detailed context in diff output (default: true)
   - Returns detailed diff and match information for dry runs, otherwise applies changes
   - Best Practice: Always use dryRun first to preview changes before applying them
+  - Special support for Flutter/Dart files with structure mode and formatting
 
 - **create_directory**
   - Create new directory or ensure it exists
@@ -63,6 +73,11 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
 - **list_directory**
   - List directory contents with [FILE] or [DIR] prefixes
   - Input: `path` (string)
+
+- **directory_tree**
+  - Get a recursive tree view of files and directories
+  - Input: `path` (string)
+  - Returns a JSON structure with file/directory information
 
 - **move_file**
   - Move or rename files and directories
@@ -96,6 +111,38 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
   - No input required
   - Returns:
     - Directories that this server can read/write from
+
+## Advanced Editing Examples
+
+### Standard Edit with Exact Matching
+```json
+{
+  "path": "src/app.js",
+  "edits": [
+    {
+      "oldText": "function hello() {\n  console.log('hello');\n}",
+      "newText": "function hello() {\n  console.log('hello world');\n}"
+    }
+  ],
+  "dryRun": true
+}
+```
+
+### Flutter/Dart Edit with Structure Mode
+```json
+{
+  "path": "lib/widgets/transaction_list_item.dart",
+  "edits": [
+    {
+      "oldText": "trailing: Text(\n  currencyFormat.format(transactionWithCategory.transaction.amount),\n  style: theme.textTheme.bodyLarge?.copyWith(\n    fontFamily: 'RobotoMono',\n    fontWeight: FontWeight.bold,\n    color: amountColor,\n  ),\n),",
+      "newText": "trailing: Text(\n  currencyFormat.format(transactionWithCategory.transaction.amount),\n  style: theme.textTheme.bodyLarge?.copyWith(\n    fontFamily: 'RobotoMono',\n    fontWeight: FontWeight.bold,\n    color: amountColor,\n    fontSize: 16,\n  ),\n),"
+    }
+  ],
+  "mode": "structure",
+  "formatAfter": true,
+  "dryRun": true
+}
+```
 
 ## Usage with Claude Desktop
 Add this to your `claude_desktop_config.json`:
