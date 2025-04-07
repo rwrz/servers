@@ -38,31 +38,37 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
     - `content` (string): File content
 
 - **edit_file**
-  - Make selective edits using advanced pattern matching and formatting
+  - Make selective edits using different modes: simple text replacement, structure-aware replacement, or applying a unified diff patch.
   - Features:
-    - Multiple matching modes for different use cases:
-      - `exact`: Strict text matching (default)
-      - `structure`: Ignores whitespace & comments for code editing
-      - `semantic`: Intelligent structure-aware code matching
-    - Line-based and multi-line content matching
-    - Whitespace normalization with indentation preservation
-    - Multiple simultaneous edits with correct positioning
-    - Indentation style detection and preservation
-    - Git-style diff output with context
-    - Preview changes with dry run mode
-    - Auto-formatting option for supported languages
+    - Multiple modes for different use cases:
+      - `exact`: Strict text matching (default). Requires `edits` input.
+      - `structure`: Ignores whitespace & comments for code editing. Requires `edits` input.
+      - `semantic`: (Future) Intelligent structure-aware code matching. Requires `edits` input.
+      - `patch`: Applies a standard unified diff patch. Requires `patch` input.
+    - For `exact`/`structure`/`semantic` modes:
+      - Line-based and multi-line content matching.
+      - Whitespace normalization with indentation preservation.
+      - Multiple simultaneous edits with correct positioning.
+      - Indentation style detection and preservation.
+      - Git-style diff output with optional context (`includeContext`).
+    - For `patch` mode:
+      - Applies standard unified diff patches precisely using context.
+      - Handles context matching automatically via the patch format.
+      - Git-style diff output for preview (`dryRun`).
+    - Preview changes with `dryRun` mode (applies to all modes).
+    - Auto-formatting option (`formatAfter`) for supported languages (applies to all modes).
   - Inputs:
-    - `path` (string): File to edit
-    - `edits` (array): List of edit operations
-      - `oldText` (string): Text to search for (can be substring)
-      - `newText` (string): Text to replace with
-    - `mode` (string): Matching mode - "exact", "structure", or "semantic" (default: "exact")
-    - `dryRun` (boolean): Preview changes without applying (default: false)
-    - `formatAfter` (boolean): Auto-format code after edits (default: false)
-    - `includeContext` (boolean): Include detailed context in diff output (default: true)
-  - Returns detailed diff and match information for dry runs, otherwise applies changes
-  - Best Practice: Always use dryRun first to preview changes before applying them
-  - Special support for Flutter/Dart files with structure mode and formatting
+    - `path` (string): File to edit.
+    - `mode` (string): Editing mode - "exact", "structure", "semantic", or "patch" (default: "exact").
+    - `edits` (array): *Required* if `mode` is "exact", "structure", or "semantic". List of edit operations:
+      - `oldText` (string): Text to search for.
+      - `newText` (string): Text to replace with.
+    - `patch` (string): *Required* if `mode` is "patch". A unified diff patch string (e.g., from `git diff`).
+    - `dryRun` (boolean): Preview changes without applying (default: false).
+    - `formatAfter` (boolean): Auto-format code after edits/patch (default: false).
+    - `includeContext` (boolean): Include context lines in diff output for `dryRun` in `exact`/`structure`/`semantic` modes (default: true). Ignored for `patch` mode dry runs (which always show context).
+  - Returns detailed diff and match information for dry runs, or confirmation/diff upon success.
+  - **Best Practice**: Always use `dryRun=true` first to preview changes before applying them, regardless of the mode. For `patch` mode, ensure the patch is generated against the current file state.
 
 - **create_directory**
   - Create new directory or ensure it exists
@@ -114,7 +120,7 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
 
 ## Advanced Editing Examples
 
-### Standard Edit with Exact Matching
+### Standard Edit (`exact` mode - default)
 ```json
 {
   "path": "src/app.js",
@@ -125,6 +131,20 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
     }
   ],
   "dryRun": true
+}
+```
+
+### Patch Edit (`patch` mode)
+```json
+{
+  "toolName": "edit_file",
+  "input": {
+    "path": "lib/infrastructure/di/service_locator.dart",
+    "mode": "patch",
+    "patch": "--- a/lib/infrastructure/di/service_locator.dart\n+++ b/lib/infrastructure/di/service_locator.dart\n@@ -1,5 +1,6 @@\n import 'package:get_it/get_it.dart';\n import 'package:yodfinance/domain/repositories/institution_repository.dart';\n+import 'package:yodfinance/domain/repositories/installment_group_repository.dart'; // NEW\n import 'package:yodfinance/domain/repositories/category_repository.dart';\n import '../../domain/repositories/account_repository.dart';\n import '../../domain/repositories/statement_import_repository.dart';\n@@ -54,6 +55,7 @@\n       transactionRepository: getIt(),\n       statementImportRepository: getIt(),\n       accountRepository: getIt(),\n+      installmentGroupRepository: getIt(), // NEW\n     ),\n   );",
+    "dryRun": true,
+    "formatAfter": true
+  }
 }
 ```
 

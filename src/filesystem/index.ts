@@ -12,9 +12,10 @@ import path from "path";
 import os from 'os';
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { diffLines, createTwoFilesPatch } from 'diff';
+import { diffLines, createTwoFilesPatch, applyPatch, parsePatch } from 'diff'; // Added applyPatch, parsePatch
 import { minimatch } from 'minimatch';
 import { formatCode } from './formatters.js';
+import { applyPatchToFile } from './patch-helpers.js'; // Import the new patch helper
 
 // Command line argument parsing
 const args = process.argv.slice(2);
@@ -114,15 +115,60 @@ const EditOperation = z.object({
   newText: z.string().describe('Text to replace with')
 });
 
+// Define the schema with optional edits and patch
 const EditFileArgsSchema = z.object({
-  path: z.string(),
-  edits: z.array(EditOperation),
-  dryRun: z.boolean().default(false).describe('Preview changes using git-style diff format'),
-  mode: z.enum(['exact', 'structure', 'semantic']).default('exact')
-      .describe('Edit mode: exact=perfect match, structure=ignore whitespace & comments, semantic=intelligent code matching'),
-  formatAfter: z.boolean().default(false).describe('Run formatter on file after edit (for supported languages)'),
-  includeContext: z.boolean().default(true).describe('Include context in diff output')
+    path: z.string().describe("Path to the file to edit."),
+    mode: z.enum(["exact", "structure", "semantic", "patch"]) // Add "patch" mode
+        .optional()
+        .default("exact")
+        .describe("Editing mode: 'exact' (default, simple text replace), 'structure' (ignores whitespace/comments), 'semantic' (future, structure-aware), 'patch' (apply unified diff)."),
+    edits: z.array(EditOperation)
+        .optional()
+        .describe("List of edit operations (REQUIRED for 'exact', 'structure', 'semantic' modes)."),
+    patch: z.string()
+        .optional()
+        .describe("A unified diff patch string (REQUIRED for 'patch' mode)."),
+    dryRun: z.boolean().optional().default(false).describe("If true, preview changes without writing to disk. Default: false"),
+    formatAfter: z.boolean().optional().default(false).describe("If true, format the code using a suitable formatter after applying edits/patch. Default: false"),
+    includeContext: z.boolean().optional().default(true).describe("Include context lines in the diff output for dry runs (only applies to 'exact'/'structure'/'semantic' modes). Default: true"),
+}).superRefine((data, ctx) => {
+    // Validation logic: ensure correct input based on mode
+    if (data.mode === 'patch') {
+        if (!data.patch) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "Input 'patch' (string) is required when mode is 'patch'.",
+                path: ["patch"], // Point error to the 'patch' field
+            });
+        }
+        if (data.edits) {
+             ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "Input 'edits' (array) should not be provided when mode is 'patch'.",
+                path: ["edits"],
+            });
+        }
+    } else { // Modes: 'exact', 'structure', 'semantic'
+        if (!data.edits || data.edits.length === 0) {
+             ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "Input 'edits' (array) is required and cannot be empty when mode is 'exact', 'structure', or 'semantic'.",
+                path: ["edits"],
+            });
+        }
+         if (data.patch) {
+             ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "Input 'patch' (string) should not be provided when mode is 'exact', 'structure', or 'semantic'.",
+                path: ["patch"],
+            });
+        }
+    }
 });
+
+// Ensure ToolInputSchema uses this updated EditFileInputSchema
+type EditFileInput = z.infer<typeof EditFileArgsSchema>; // For type safety in handler
+
 
 const CreateDirectoryArgsSchema = z.object({
   path: z.string(),
@@ -573,11 +619,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "edit_file",
         description:
-            "Make line-based edits to a text file with flexible matching modes. " +
+            "Make selective edits using different modes: simple text replacement, structure-aware replacement, or applying a unified diff patch. " +
             "Supports 'exact' matching (default), 'structure' mode (ignores whitespace and comments), " +
-            "and 'semantic' mode for more intelligent code matching. " +
+            "'semantic' mode (future, structure-aware), and 'patch' mode (apply unified diff). " +
             "Returns a git-style diff showing the changes made. " +
-            "Use dryRun: true to preview changes. Can auto-format code after edits with formatAfter: true. " +
+            "Use dryRun=true to preview changes. Can auto-format code after edits/patch with formatAfter=true. " +
             "Only works within allowed directories.",
         inputSchema: zodToJsonSchema(EditFileArgsSchema) as ToolInput,
       },
@@ -709,16 +755,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw new Error(`Invalid arguments for edit_file: ${parsed.error}`);
         }
         const validPath = await validatePath(parsed.data.path);
-        const result = await applyFileEdits(
-            validPath,
-            parsed.data.edits,
-            parsed.data.dryRun,
-            parsed.data.mode,
-            parsed.data.formatAfter,
-            parsed.data.includeContext
-        );
+        const { mode, edits, patch, dryRun, formatAfter, includeContext } = parsed.data;
+        let resultMessage: string;
+
+        if (mode === 'patch') {
+            // We know 'patch' is defined and 'edits' is not, due to superRefine
+            // Use non-null assertion (!) for patch as it's guaranteed by validation
+            resultMessage = await applyPatchToFile(validPath, patch!, dryRun, formatAfter);
+        } else {
+            // We know 'edits' is defined and 'patch' is not, due to superRefine
+            // Modes 'exact', 'structure', 'semantic' use the original function
+            // Use non-null assertion (!) for edits as it's guaranteed by validation
+            resultMessage = await applyFileEdits(
+                validPath,
+                edits!,
+                dryRun,
+                mode,
+                formatAfter,
+                includeContext
+            );
+        }
+
         return {
-          content: [{ type: "text", text: result }],
+          content: [{ type: "text", text: resultMessage }], // Use resultMessage
         };
       }
 
