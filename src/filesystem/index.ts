@@ -821,7 +821,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Handler for executing a specific tool
 // --- CORRECTION: Ensure return type matches expected MCP response ---
 server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
-    output?: any;
+    content?: Array<{ type: string; text: string; } | any>;
     error?: { message: string; stack?: string }
 }> => {
     try {
@@ -851,7 +851,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                 const validPath = await validatePath(parsedArgs.path);
                 const content = await fs.readFile(validPath, "utf-8");
                 // --- CORRECTION: Wrap result in { output: ... } ---
-                return {output: {content: [{type: "text", text: content}]}};
+                return {content: [{type: "text", text: content}]};
             }
 
             case "read_multiple_files": {
@@ -871,7 +871,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                         return `--- File: ${parsedArgs.paths[index]} ---\nError: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
                     }
                 }).join("\n\n");
-                return {output: {content: [{type: "text", text: formattedResults}]}};
+                return {content: [{type: "text", text: formattedResults}]};
             }
 
             case "write_file": {
@@ -882,7 +882,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                 await fs.mkdir(parentDir, {recursive: true});
                 await fs.writeFile(validPath, parsedArgs.content, "utf-8");
                 // --- CORRECTION: Wrap result in { output: ... } ---
-                return {output: {content: [{type: "text", text: `Successfully wrote to ${parsedArgs.path}`}]}};
+                return {content: [{type: "text", text: `Successfully wrote to ${parsedArgs.path}`}]};
             }
 
             case "edit_file": {
@@ -911,11 +911,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                 // --- CORRECTION: Wrap result correctly ---
                 if (typeof result === 'string') {
                     // Simple success message or basic dry run string
-                    return {output: {content: [{type: "text", text: result}]}};
+                    return {content: [{type: "text", text: result}]};
                 } else if (typeof result === 'object' && result !== null) {
                     // Structured response (AMBIGUOUS or detailed DRY_RUN_SUCCESS)
                     // Return the object directly as the output value
-                    return {output: result};
+                    return result;
                 } else {
                     throw new Error("Edit operation returned an unexpected result type.");
                 }
@@ -925,7 +925,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                 const parsedArgs = CreateDirectoryArgsSchema.parse(args ?? {});
                 const validPath = await validatePath(parsedArgs.path);
                 await fs.mkdir(validPath, {recursive: true});
-                return {output: {content: [{type: "text", text: `Directory ensured at ${parsedArgs.path}`}]}};
+                return {content: [{type: "text", text: `Directory ensured at ${parsedArgs.path}`}]};
             }
 
             case "list_directory": {
@@ -935,7 +935,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                 const formatted = entries
                     .map((entry) => `${entry.isDirectory() ? "[DIR] " : "[FILE]"} ${entry.name}`)
                     .join("\n");
-                return {output: {content: [{type: "text", text: formatted || "(Directory is empty)"}]}};
+                return {content: [{type: "text", text: formatted || "(Directory is empty)"}]};
             }
 
             case "directory_tree": {
@@ -981,7 +981,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                     children: await buildTree(validRootPath)
                 };
                 // Return the structured JSON object directly as output
-                return {output: treeData};
+                const treeString = JSON.stringify(treeData, null, 2);
+                // --- Correct: Return content array directly on success ---
+                return {content: [{type: "text", text: treeString}]};
             }
 
             case "move_file": {
@@ -997,42 +999,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{
                 const destParentDir = path.dirname(validDestPath);
                 await fs.mkdir(destParentDir, {recursive: true});
                 await fs.rename(validSourcePath, validDestPath);
-                return {
-                    output: {
-                        content: [{
-                            type: "text",
-                            text: `Successfully moved ${parsedArgs.source} to ${parsedArgs.destination}`
-                        }]
-                    }
-                };
+                // --- Correct: Return content array directly on success ---
+                const successMessage = `Successfully moved ${parsedArgs.source} to ${parsedArgs.destination}`;
+                return { content: [{ type: "text", text: successMessage }] };
             }
 
             case "search_files": {
                 const parsedArgs = SearchFilesArgsSchema.parse(args ?? {});
                 const validPath = await validatePath(parsedArgs.path);
                 const results = await searchFiles(validPath, parsedArgs.pattern, parsedArgs.excludePatterns);
-                return {
-                    output: {
-                        content: [{
-                            type: "text",
-                            text: results.length > 0 ? results.join("\n") : "No matches found"
-                        }]
-                    }
-                };
+                const resultText = results.length > 0 ? results.join("\n") : "No matches found";
+                // --- Correct: Return content array directly on success ---
+                return { content: [{ type: "text", text: resultText }] };
             }
 
             case "get_file_info": {
                 const parsedArgs = GetFileInfoArgsSchema.parse(args ?? {});
                 const validPath = await validatePath(parsedArgs.path);
                 const info = await getFileStats(validPath);
-                // Return structured info object
-                return {output: info};
+                // --- Correct: Stringify info object for text field ---
+                const infoString = Object.entries(info)
+                    .map(([key, value]) => `${key}: ${value instanceof Date ? value.toISOString() : value}`)
+                    .join("\n");
+                return { content: [{ type: "text", text: infoString }] };
             }
 
             case "list_allowed_directories": {
                 z.object({}).parse(args ?? {}); // Validate no args passed
-                return {output: {allowedDirectories: allowedDirectories}}; // Return as structured data
-            }
+                const dirListString = `Allowed root directories:\n${allowedDirectories.join('\n')}`;
+                // --- Correct: Return content array directly on success ---
+                return { content: [{ type: "text", text: dirListString }] };            }
 
             default:
                 throw new Error(`Unknown tool: ${name}`);
