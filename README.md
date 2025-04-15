@@ -1,5 +1,4 @@
-# Model Context Protocol servers
-
+# MCP Servers Collection
 This repository is a collection of *reference implementations* for the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), as well as references
 to community built servers and additional resources.
 
@@ -13,7 +12,7 @@ Each MCP server is implemented with either the [Typescript MCP SDK](https://gith
 These servers aim to demonstrate MCP features and the TypeScript and Python SDKs.
 
 - **[AWS KB Retrieval](src/aws-kb-retrieval-server)** - Retrieval from AWS Knowledge Base using Bedrock Agent Runtime
-- **[Brave Search](src/brave-search)** - Web and local search using Brave's Search API
+- **[Test Server](src/test-server)** - A new server added to test the `edit_file` modes- **[Brave Search](src/brave-search)** - Web and local search using Brave's Search API
 - **[EverArt](src/everart)** - AI image generation using various models
 - **[Everything](src/everything)** - Reference / test server with prompts, resources, and tools
 - **[Fetch](src/fetch)** - Web content fetching and conversion for efficient LLM usage
