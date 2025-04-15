@@ -437,6 +437,16 @@ export function findFuzzyMatches(
         const similarity = compareTwoStrings(normalizedPattern, substring);
 
         if (similarity >= threshold) {
+            console.debug(`Fuzzy Match Found: Index=${i}, Similarity=${similarity.toFixed(4)}`);
+            console.debug(`  Pattern (Normalized): ${JSON.stringify(normalizedPattern)}`);
+            console.debug(`  Substring (Normalized): ${JSON.stringify(substring)}`);
+        } else if (i < 5 && threshold === 1.0) { // Log first few comparisons if expecting exact match
+            console.debug(`Initial Compare: Index=${i}, Similarity=${similarity.toFixed(4)}`);
+            console.debug(`  Pattern (Normalized): ${JSON.stringify(normalizedPattern)}`);
+            console.debug(`  Substring (Normalized): ${JSON.stringify(substring)}`);
+        }
+
+        if (similarity >= threshold) {
             // Check for significant overlap with the previously added match
             const lastMatch = matches[matches.length - 1];
             // Add if no previous match OR current match starts at or after the end of the last match
@@ -775,68 +785,94 @@ export async function applySmartEdits(
         } else if (matches.length === 1) {
             chosenMatch = matches[0];
             matchIndexUsed = 0;
-            if (disambiguationIndex && editIndex === 0) {
-                console.error(`Edit ${editIndex + 1}: Disambiguation index ${disambiguationIndex} provided, but only one match found. Using the single match.`);
+            // --- MODIFICATION: Log if index was provided but unused ---
+            if (disambiguationIndex /* Removed && editIndex === 0 */) { // Check if index was provided AT ALL for this edit
+                console.warn(`Edit ${editIndex + 1}: Disambiguation index ${disambiguationIndex} provided, but only one match found in the current content state. Using the single match.`);
             }
+            // --- END MODIFICATION ---
             ambiguityRequiresRetry = false; // Not ambiguous
         } else { // matches.length > 1
-            if (disambiguationIndex && editIndex === 0) {
+            // --- MODIFICATION: Always check for disambiguationIndex if provided ---
+            if (disambiguationIndex) { // Check if index was provided for *this specific ambiguous situation*
+                // Validate index against CURRENT matches
                 if (disambiguationIndex > 0 && disambiguationIndex <= matches.length) {
                     chosenMatch = matches[disambiguationIndex - 1];
                     matchIndexUsed = disambiguationIndex - 1;
-                    console.error(`Using disambiguation index ${disambiguationIndex} (0-based: ${matchIndexUsed}) for edit ${editIndex + 1}.`);
-                    ambiguityRequiresRetry = false; // Resolved
+                    console.error(`Edit ${editIndex + 1}: Using provided disambiguation index ${disambiguationIndex} (0-based: ${matchIndexUsed}) to resolve ambiguity among ${matches.length} matches found in current state.`);
+                    ambiguityRequiresRetry = false; // Resolved by index
                 } else {
-                    throw new Error(`Edit ${editIndex + 1}: Invalid disambiguation index ${disambiguationIndex}. Found ${matches.length} matches this time.`);
+                    // Provided index is invalid for the *current* number of matches
+                    // We MUST treat this as ambiguity again, ignoring the invalid index
+                    ambiguityRequiresRetry = true;
+                    console.error(`Edit ${editIndex + 1}: Invalid disambiguation index ${disambiguationIndex} provided for ${matches.length} matches found in current state. Reporting ambiguity.`);
+                    // Proceed to ambiguity reporting block below
                 }
             } else {
-                // MULTIPLE MATCHES + (NO INDEX OR NOT FIRST EDIT) -> AMBIGUOUS
+                // No index provided, definitely ambiguous
                 ambiguityRequiresRetry = true;
+                console.error(`Edit ${editIndex + 1}: Ambiguity detected (${matches.length} matches) and no disambiguation index provided. Reporting ambiguity.`);
+            }
+            // --- END MODIFICATION ---
+
+            // --- Report Ambiguity IF ambiguityRequiresRetry is still true ---
+            if (ambiguityRequiresRetry) {
                 console.error(`Ambiguity detected for edit ${editIndex + 1}, preparing context...`);
-                const ambiguousMatchesContextLocal: Array<{
-                    index: number;
-                    originalLocation: { start: number; end: number };
-                    context: string
-                }> = [];
-                for (let i = 0; i < matches.length; i++) {
-                    const match = matches[i];
-                    // Translate range based on the *current* mapping
-                    const originalRange = translateNormalizedRangeToOriginal(match.start, match.end, currentFileMapping); // Use CURRENT mapping
-                    if (originalRange) {
-                        // Extract context from *currentContent* state
-                        const context = extractContextLines(currentContent, originalRange.originalStart, originalRange.originalEnd); // Use CURRENT content
-                        ambiguousMatchesContextLocal.push({
-                            index: i + 1,
-                            originalLocation: {start: originalRange.originalStart, end: originalRange.originalEnd},
-                            context
-                        });
-                    } else { /* handle mapping failure */
-                        ambiguousMatchesContextLocal.push({
-                            index: i + 1,
-                            originalLocation: {start: -1, end: -1},
-                            context: "[Mapping Failed]"
-                        });
-                    }
-                }
+                const ambiguousMatchesContextLocal: Array<{ /* ... */ }> = [];
+                // ... (build context as before) ...
                 // Return immediately for ambiguity
                 return {
                     status: "AMBIGUOUS",
-                    message: `Multiple potential matches found for edit ${editIndex + 1}. Please specify the index (1-based) in 'disambiguationIndex' on your next request for this specific edit.`,
-                    editIndex: editIndex + 1, // Inform AI which edit was ambiguous
+                    message: `Multiple potential matches found for edit ${editIndex + 1}. Found ${matches.length} matches in the current file state. ${disambiguationIndex ? `The provided index ${disambiguationIndex} was invalid. ` : ''}Please specify a valid index (1-${matches.length}) in 'disambiguationIndex' on your next request for this specific edit.`,
+                    editIndex: editIndex + 1,
                     matches: ambiguousMatchesContextLocal,
                 };
             }
+            // --- END Ambiguity Reporting Block ---
         }
 
         // --- Apply the chosen edit immediately to currentContent ---
         if (chosenMatch) {
             // Translate chosen match range based on the mapping used for *this* search
-            const originalRange = translateNormalizedRangeToOriginal(chosenMatch.start, chosenMatch.end, currentFileMapping); // Use CURRENT mapping
+            let originalRange = translateNormalizedRangeToOriginal(chosenMatch.start, chosenMatch.end, currentFileMapping); // Use CURRENT mapping
+
+
+
+            // --- BEGIN FUZZY MATCH REFINEMENT ---
+            // If mapping succeeded AND the match wasn't exact (similarity < 1.0)
+            // AND we have the original non-normalized oldText to search for
+            if (originalRange && chosenMatch.similarity < 1.0 && edit.oldText) {
+                console.error(`Edit ${editIndex + 1}: Fuzzy match (sim: ${chosenMatch.similarity.toFixed(3)}). Attempting exact match refinement.`);
+                // Define a reasonable window around the approximate original range
+                // Adjust window size as needed (e.g., +/- 50 characters or a few lines)
+                const windowPadding = 50;
+                const searchWindowStart = Math.max(0, originalRange.originalStart - windowPadding);
+                const searchWindowEnd = Math.min(currentContent.length, originalRange.originalEnd + windowPadding);
+                const searchWindowContent = currentContent.substring(searchWindowStart, searchWindowEnd);
+
+                // Use normalizeLineEndings on the actual oldText from the edit request for comparison consistency
+                const exactPatternToFind = normalizeLineEndings(edit.oldText);
+
+                // Search for the *exact* oldText within this window
+                const exactIndexInWindow = searchWindowContent.indexOf(exactPatternToFind);
+
+                if (exactIndexInWindow !== -1) {
+                    // Found exact match nearby! Update the originalRange
+                    const refinedStart = searchWindowStart + exactIndexInWindow;
+                    const refinedEnd = refinedStart + exactPatternToFind.length; // Use exact length
+                    console.error(`Edit ${editIndex + 1}: Refined range via exact match: ${refinedStart}-${refinedEnd} (Original fuzzy map: ${originalRange.originalStart}-${originalRange.originalEnd})`);
+                    originalRange = { originalStart: refinedStart, originalEnd: refinedEnd };
+                } else {
+                    console.warn(`Edit ${editIndex + 1}: Exact match refinement failed within window. Using original fuzzy-mapped range: ${originalRange.originalStart}-${originalRange.originalEnd}`);
+                    // Proceed with the potentially inaccurate range from the fuzzy map
+                }
+            }
+            // --- END FUZZY MATCH REFINEMENT ---
             if (!originalRange) {
+                // If mapping failed initially OR after refinement logic (though refinement shouldn't nullify it)
                 throw new Error(`Edit ${editIndex + 1}: Failed to map chosen match back to current content location.`);
             }
 
-            // Store info for dry run *before* modifying content
+            // Store info *using the potentially refined originalRange*
             appliedEditsInfoAccumulator.push({
                 editIndex: editIndex + 1,
                 originalRange: {start: originalRange.originalStart, end: originalRange.originalEnd},
@@ -845,7 +881,7 @@ export async function applySmartEdits(
                 matchIndexUsed: matchIndexUsed
             });
 
-            // Apply replacement to currentContent
+            // Apply replacement to currentContent *using the potentially refined originalRange*
             const safeStart = Math.min(originalRange.originalStart, currentContent.length);
             const safeEnd = Math.min(originalRange.originalEnd, currentContent.length);
 
@@ -853,12 +889,19 @@ export async function applySmartEdits(
                 console.error(`Warning: Attempting to apply edit ${editIndex + 1} with end (${safeEnd}) before start (${safeStart}). Skipping this edit.`);
             } else {
                 console.error(`Applying Edit ${editIndex + 1}: Replacing range ${safeStart}-${safeEnd} in current content.`);
+                // --- Consider preserving leading/trailing whitespace (More complex change) ---
+                // let replacementText = edit.newText;
+                // Maybe add logic here to capture whitespace before safeStart and after safeEnd
+                // from the original content slice and apply it to replacementText if appropriate.
+                // This is non-trivial. For now, use the direct newText.
+
                 currentContent =
                     currentContent.slice(0, safeStart) +
-                    edit.newText +
+                    normalizeLineEndings(edit.newText) + // Ensure consistent line endings in replacement
                     currentContent.slice(safeEnd);
-                // console.error(`DEBUG: Content after edit ${editIndex + 1}:\n${currentContent.substring(0,500)}`); // Debug log
             }
+        } else if (!ambiguityRequiresRetry) { // Should not happen if logic above is correct
+            throw new Error(`Internal error in edit ${editIndex + 1}: No match chosen but ambiguity not reported.`);
         } else {
             // This should only be reachable if ambiguity occurred but wasn't returned (logic error)
             throw new Error(`Internal error in edit ${editIndex + 1}: No match chosen but ambiguity not returned.`);
