@@ -38,13 +38,14 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
     - `content` (string): File content
 
 - **edit_file**
-  - Make selective edits using different modes: simple text replacement, structure-aware replacement, or applying a unified diff patch.
+  - Make selective edits using different modes: simple text replacement, structure-aware replacement, applying a unified diff patch, or smart search with normalization and disambiguation.
   - Features:
     - Multiple modes for different use cases:
       - `exact`: Strict text matching (default). Requires `edits` input.
       - `structure`: Ignores whitespace & comments for code editing. Requires `edits` input.
       - `semantic`: (Future) Intelligent structure-aware code matching. Requires `edits` input.
       - `patch`: Applies a standard unified diff patch. Requires `patch` input.
+      - `smart`: Advanced matching with normalization options and disambiguation for ambiguous matches. Requires `edits` input.
     - For `exact`/`structure`/`semantic` modes:
       - Line-based and multi-line content matching.
       - Whitespace normalization with indentation preservation.
@@ -55,18 +56,33 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
       - Applies standard unified diff patches precisely using context.
       - Handles context matching automatically via the patch format.
       - Git-style diff output for preview (`dryRun`).
+    - For `smart` mode:
+      - Advanced normalization options for flexible matching.
+      - Fuzzy matching with configurable similarity threshold.
+      - Interactive disambiguation for ambiguous matches.
+      - Character-level offset mapping between normalized and original content.
+      - Comprehensive context information for choosing between multiple matches.
     - Preview changes with `dryRun` mode (applies to all modes).
     - Auto-formatting option (`formatAfter`) for supported languages (applies to all modes).
   - Inputs:
     - `path` (string): File to edit.
-    - `mode` (string): Editing mode - "exact", "structure", "semantic", or "patch" (default: "exact").
-    - `edits` (array): *Required* if `mode` is "exact", "structure", or "semantic". List of edit operations:
+    - `mode` (string): Editing mode - "exact", "structure", "semantic", "patch", or "smart" (default: "exact").
+    - `edits` (array): *Required* if `mode` is "exact", "structure", "semantic", or "smart". List of edit operations:
       - `oldText` (string): Text to search for.
       - `newText` (string): Text to replace with.
     - `patch` (string): *Required* if `mode` is "patch". A unified diff patch string (e.g., from `git diff`).
+    - `normalizationOptions` (object): *Optional* for `smart` mode. Controls how text is normalized before matching.
+      - `ignoreComments` (boolean, default: true): Remove code comments.
+      - `ignoreLeadingWhitespace` (boolean, default: true): Trim whitespace from start of lines.
+      - `ignoreTrailingWhitespace` (boolean, default: true): Trim whitespace from end of lines.
+      - `ignoreInternalWhitespace` (string, default: "collapse"): How to handle whitespace within lines ("collapse", "remove", or "keep").
+      - `ignoreBlankLines` (boolean, default: true): Ignore blank lines.
+      - `caseSensitive` (boolean, default: true): Whether to consider case.
+    - `similarityThreshold` (number): *Optional* for `smart` mode. Minimum similarity (0.0-1.0) required for a match (default: 1.0).
+    - `disambiguationIndex` (integer): *Optional* for `smart` mode. 1-based index to select a match when multiple ambiguous matches were found in previous call.
     - `dryRun` (boolean): Preview changes without applying (default: false).
     - `formatAfter` (boolean): Auto-format code after edits/patch (default: false).
-    - `includeContext` (boolean): Include context lines in diff output for `dryRun` in `exact`/`structure`/`semantic` modes (default: true). Ignored for `patch` mode dry runs (which always show context).
+    - `includeContext` (boolean): Include context lines in diff output for `dryRun` (default: true).
   - Returns detailed diff and match information for dry runs, or confirmation/diff upon success.
   - **Best Practice**: Always use `dryRun=true` first to preview changes before applying them, regardless of the mode. For `patch` mode, ensure the patch is generated against the current file state.
 
@@ -119,6 +135,71 @@ Node.js server implementing Model Context Protocol (MCP) for filesystem operatio
     - Directories that this server can read/write from
 
 ## Advanced Editing Examples
+
+### Smart Search/Replace with Ambiguity Detection
+```json
+{
+  "path": "src/components/UserProfile.tsx",
+  "mode": "smart",
+  "edits": [
+    {
+      "oldText": "const userStatus = user.isActive ? 'Active' : 'Inactive';",
+      "newText": "const userStatus = user.isActive ? 'Active' : (user.isPending ? 'Pending' : 'Inactive');"
+    }
+  ],
+  "normalizationOptions": {
+    "ignoreComments": true,
+    "ignoreWhitespace": true,
+    "caseSensitive": true
+  },
+  "similarityThreshold": 0.9,
+  "dryRun": true
+}
+```
+
+This might return an ambiguous response if multiple matches are found:
+
+```json
+{
+  "status": "AMBIGUOUS",
+  "message": "Multiple potential matches found for edit 1. Please specify the index (1-based) in 'disambiguationIndex' on your next request.",
+  "matches": [
+    {
+      "index": 1,
+      "originalLocation": { "start": 245, "end": 302 },
+      "context": "function UserStatus() {\n  const userStatus = user.isActive ? 'Active' : 'Inactive';\n  return <span"
+    },
+    {
+      "index": 2,
+      "originalLocation": { "start": 1050, "end": 1107 },
+      "context": "  renderStatus() {\n    const userStatus = user.isActive ? 'Active' : 'Inactive';\n    return <Badge"
+    }
+  ]
+}
+```
+
+Disambiguate by providing the index in the follow-up request:
+
+```json
+{
+  "path": "src/components/UserProfile.tsx",
+  "mode": "smart",
+  "edits": [
+    {
+      "oldText": "const userStatus = user.isActive ? 'Active' : 'Inactive';",
+      "newText": "const userStatus = user.isActive ? 'Active' : (user.isPending ? 'Pending' : 'Inactive');"
+    }
+  ],
+  "normalizationOptions": {
+    "ignoreComments": true,
+    "ignoreWhitespace": true,
+    "caseSensitive": true
+  },
+  "similarityThreshold": 0.9,
+  "disambiguationIndex": 1,
+  "dryRun": false
+}
+```
 
 ### Standard Edit (`exact` mode - default)
 ```json
